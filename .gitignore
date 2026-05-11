@@ -1,8 +1,35 @@
+# Local environment variables
 .env
+
+# Python artifacts
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+env/
 venv/
+.venv/
+*.log
+.pytest_cache/
+.coverage
+.mypy_cache/
+
+# Django specific
+*.sqlite3
+db.sqlite3-journal
+media/
+staticfiles/
+
+# Node / Frontend
 node_modules/
 dist/
-*.sqlite3
+build/
+.eslintcache
+
+# OS / IDE
 .DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
