@@ -11,7 +11,7 @@ class AgentState(TypedDict):
     raw_results: List[dict]
     source_ids:  List[int]
     chunks:      List[dict]
-    sreport:      str
+    report:      str
     error:       Optional[str]
 
 
