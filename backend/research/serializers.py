@@ -21,3 +21,10 @@ class ResearchQueryCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model  = ResearchQuery
         fields = ["query"]
+
+
+class ResearchQueryListSerializer(serializers.ModelSerializer):
+    """Lightweight shape for the history sidebar (no report body or sources)."""
+    class Meta:
+        model  = ResearchQuery
+        fields = ["id", "query", "status", "status_message", "created_at", "updated_at"]

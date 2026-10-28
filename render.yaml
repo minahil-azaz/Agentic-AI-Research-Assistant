@@ -1,0 +1,68 @@
+# Render Blueprint: Postgres (pgvector) + Django API + React static site.
+# Render dashboard → New → Blueprint → pick this repo. Fill in the "sync: false" values when prompted.
+databases:
+  - name: research-db
+    plan: free            # free databases expire after 30 days; use basic-256mb or higher to keep data
+    databaseName: research_db
+    user: research_user
+
+services:
+  - type: web
+    name: research-backend
+    runtime: python
+    rootDir: backend
+    plan: free
+    # CPU-only torch keeps the build small (the default wheel bundles CUDA)
+    buildCommand: >-
+      pip install torch==2.4.0 --index-url https://download.pytorch.org/whl/cpu &&
+      pip install -r requirements.txt &&
+      python manage.py collectstatic --noinput
+    # migrate runs here because preDeployCommand needs a paid plan.
+    # gthread + long timeout: each research stream holds a thread for several minutes.
+    startCommand: >-
+      python manage.py migrate --noinput &&
+      gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
+      --worker-class gthread --workers 1 --threads 8 --timeout 600
+    healthCheckPath: /api/health/
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: DATABASE_URL
+        fromDatabase:
+          name: research-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DEBUG
+        value: "False"
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: FORCE_MOCK_GEMINI
+        value: "False"
+      # The sentence-transformers model needs ~1 GB RAM; the free/starter plans have 512 MB.
+      # Keep "True" there (keyword-hash retrieval); set "False" on Standard (2 GB) or higher.
+      - key: FORCE_MOCK_EMBEDDINGS
+        value: "True"
+      # Frontend URL(s), e.g. https://research-frontend.onrender.com or https://my-app.vercel.app
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+
+  # Skip this service if you host the frontend on Vercel instead (see frontend/vercel.json).
+  - type: web
+    name: research-frontend
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      # Backend URL, e.g. https://research-backend.onrender.com (no trailing slash)
+      - key: VITE_API_URL
+        sync: false

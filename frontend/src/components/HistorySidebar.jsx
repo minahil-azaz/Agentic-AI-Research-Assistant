@@ -9,6 +9,8 @@ const timeAgo = (d) => {
   return `${Math.floor(h / 24)}d ago`;
 };
 
+const LABEL = { error:"Failed", pending:"Queued", planning:"Running", searching:"Running", scraping:"Running", embedding:"Running", writing:"Running" };
+
 const DOT = { done:"#4ade80", error:"#f87171", planning:"#60a5fa", searching:"#60a5fa", scraping:"#f59e0b", embedding:"#f59e0b", writing:"#a78bfa", pending:"#94a3b8" };
 
 export default function HistorySidebar({ history, onSelect, onDelete, activeId }) {
@@ -18,11 +20,16 @@ export default function HistorySidebar({ history, onSelect, onDelete, activeId }
   return (
     <div className="sidebar-list">
       {history.map(item => (
-        <div key={item.id} className={`sidebar-item ${activeId === item.id ? "active" : ""}`} onClick={() => onSelect(item)}>
+        <div key={item.id} className={`sidebar-item ${activeId === item.id ? "active" : ""}`} onClick={() => onSelect(item)}
+             role="button" tabIndex={0} title={item.query}
+             onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(item); } }}>
           <div className="sidebar-item-dot" style={{ background: DOT[item.status] || "#94a3b8" }}/>
           <div className="sidebar-item-body">
             <p className="sidebar-item-query">{item.query.slice(0, 58)}{item.query.length > 58 ? "…" : ""}</p>
-            <span className="sidebar-item-time">{timeAgo(item.created_at)}</span>
+            <span className="sidebar-item-time">
+              {timeAgo(item.created_at)}
+              {LABEL[item.status] && <span className={`sidebar-item-status ${item.status === "error" ? "error" : ""}`}> · {LABEL[item.status]}</span>}
+            </span>
           </div>
           <button className="sidebar-delete" onClick={e => { e.stopPropagation(); onDelete(item.id); }} title="Delete"><Trash2 size={13}/></button>
           <ChevronRight size={13} className="sidebar-chevron"/>

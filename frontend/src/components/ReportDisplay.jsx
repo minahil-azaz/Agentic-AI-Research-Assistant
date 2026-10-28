@@ -1,23 +1,40 @@
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Copy, Download, Check } from "lucide-react";
+import { Copy, Download, Check, RotateCcw } from "lucide-react";
 import SourceCard from "./SourceCard";
 
-export default function ReportDisplay({ report, sources }) {
-  const [copied, setCopied] = useState(false);
+const slugify = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60);
+
+export default function ReportDisplay({ report, sources, query, onRerun }) {
+  const [copied, setCopied] = useState(null);
 
   const copy = async () => {
-    await navigator.clipboard.writeText(report);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await navigator.clipboard.writeText(report);
+      setCopied("ok");
+    } catch {
+      // Clipboard API is unavailable on plain-http origins other than localhost
+      const ta = document.createElement("textarea");
+      ta.value = report;
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      ta.remove();
+      setCopied(ok ? "ok" : "fail");
+    }
+    setTimeout(() => setCopied(null), 2000);
   };
 
   const download = () => {
-    const a   = document.createElement("a");
-    a.href    = URL.createObjectURL(new Blob([report], { type: "text/markdown" }));
-    a.download = `research-${Date.now()}.md`;
+    const url  = URL.createObjectURL(new Blob([report], { type: "text/markdown" }));
+    const a    = document.createElement("a");
+    a.href     = url;
+    a.download = `research-${slugify(query) || Date.now()}.md`;
+    document.body.appendChild(a);
     a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
   };
 
   return (
@@ -26,17 +43,25 @@ export default function ReportDisplay({ report, sources }) {
         <span className="report-badge">Report ready</span>
         <div className="report-btns">
           <button className="action-btn" onClick={copy}>
-            {copied ? <Check size={14}/> : <Copy size={14}/>}
-            {copied ? "Copied!" : "Copy"}
+            {copied === "ok" ? <Check size={14}/> : <Copy size={14}/>}
+            {copied === "ok" ? "Copied!" : copied === "fail" ? "Copy failed" : "Copy"}
           </button>
           <button className="action-btn" onClick={download}>
             <Download size={14}/> Download .md
           </button>
+          {onRerun && (
+            <button className="action-btn" onClick={onRerun} title="Run this query again for fresh results (the saved report is kept)">
+              <RotateCcw size={14}/> Run again
+            </button>
+          )}
         </div>
       </div>
 
       <div className="markdown-body">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{report}</ReactMarkdown>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={{ a: ({ node, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer"/> }}
+        >{report}</ReactMarkdown>
       </div>
 
       {sources?.length > 0 && (

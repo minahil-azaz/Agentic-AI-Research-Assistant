@@ -10,6 +10,9 @@ urlpatterns = [
     path("auth/me/",                  views.me_view,              name="me"),
     path("auth/token/refresh/",       TokenRefreshView.as_view(), name="token_refresh"),
 
+    # Config / health
+    path("health/",                   views.health_view,          name="health"),
+
     # Research
     path("research/",                 views.create_research,      name="create_research"),
     path("research/list/",            views.list_research,        name="list_research"),

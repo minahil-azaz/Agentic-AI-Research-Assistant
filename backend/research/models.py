@@ -40,6 +40,7 @@ class ResearchSource(models.Model):
 
     class Meta:
         unique_together = ("query", "url")
+        ordering        = ["created_at", "id"]
 
     def __str__(self):
         return self.title or self.url[:60]

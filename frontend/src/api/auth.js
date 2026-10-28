@@ -1,4 +1,7 @@
-const BASE = "/api/auth";
+// Backend origin when hosted separately (e.g. https://my-api.onrender.com). Empty = same origin / Vite proxy.
+export const API_ORIGIN = (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
+
+const BASE = `${API_ORIGIN}/api/auth`;
 
 export const getToken   = () => localStorage.getItem("access_token");
 export const getRefresh = () => localStorage.getItem("refresh_token");

@@ -1,6 +1,7 @@
 import os
 from datetime import timedelta
 from pathlib import Path
+import dj_database_url
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -9,7 +10,15 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-in-production")
 DEBUG = os.getenv("DEBUG", "True") == "True"
-ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1,backend").split(",")
+ALLOWED_HOSTS = [h.strip() for h in os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1,backend").split(",") if h.strip()]
+
+# Render sets this to the service's public hostname (e.g. my-api.onrender.com)
+RENDER_EXTERNAL_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME")
+if RENDER_EXTERNAL_HOSTNAME:
+    ALLOWED_HOSTS.append(RENDER_EXTERNAL_HOSTNAME)
+
+if not DEBUG and SECRET_KEY == "dev-secret-change-in-production":
+    raise RuntimeError("Set SECRET_KEY when DEBUG=False.")
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -29,6 +38,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -59,6 +69,9 @@ WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
 
 DATABASES = {
+    # Hosted Postgres (Render, etc.) provides a single DATABASE_URL
+    "default": dj_database_url.parse(os.environ["DATABASE_URL"], conn_max_age=60)
+} if os.getenv("DATABASE_URL") else {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
         "NAME":     os.getenv("POSTGRES_DB",       "research_db"),
@@ -76,7 +89,20 @@ CHANNEL_LAYERS = {
     }
 }
 
-CORS_ALLOW_ALL_ORIGINS = True
+# Comma-separated frontend origins, e.g. https://my-app.vercel.app. Unset = allow all (local dev).
+CORS_ALLOWED_ORIGINS = [o.strip().rstrip("/") for o in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if o.strip()]
+CORS_ALLOW_ALL_ORIGINS = not CORS_ALLOWED_ORIGINS
+CSRF_TRUSTED_ORIGINS = [o.strip().rstrip("/") for o in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if o.strip()]
+if RENDER_EXTERNAL_HOSTNAME:
+    CSRF_TRUSTED_ORIGINS.append(f"https://{RENDER_EXTERNAL_HOSTNAME}")
+
+# Behind Render's/Vercel's HTTPS proxy
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+if not DEBUG:
+    # Render/Vercel already redirect http→https at the edge, so SECURE_SSL_REDIRECT is left off
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE    = True
+    SECURE_HSTS_SECONDS   = 60 * 60 * 24 * 30
 
 REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": [
@@ -99,6 +125,11 @@ SIMPLE_JWT = {
 }
 
 STATIC_URL = "/static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+STORAGES = {
+    "default":     {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
+}
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY",  "")

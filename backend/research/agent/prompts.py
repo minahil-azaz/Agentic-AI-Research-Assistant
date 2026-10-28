@@ -16,8 +16,10 @@ SOURCES:
 {context}
 
 RULES:
-- Structure: ## Overview, ## Key Findings, ## Analysis, ## Conclusion, ## Sources
-- Cite inline as [Source N]
+- Structure: ## Overview, ## Key Findings, ## Analysis, ## Conclusion
+- Cite inline as [Source N], using only the source numbers shown above
+- Base every claim on the excerpts; if they do not cover part of the query, say so instead of guessing
+- Do not write a Sources section; it is appended automatically
 - Minimum 600 words
 - Be factual and analytical
 

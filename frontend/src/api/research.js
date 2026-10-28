@@ -1,6 +1,6 @@
-import { getToken, refreshAccessToken, clearTokens } from "./auth";
+import { getToken, refreshAccessToken, clearTokens, API_ORIGIN } from "./auth";
 
-const BASE = "/api";
+const BASE = `${API_ORIGIN}/api`;
 
 async function authFetch(url, options = {}) {
   let token = getToken();
@@ -31,17 +31,22 @@ export function streamResearch(queryId, onEvent) {
   const token = getToken();
   const es    = new EventSource(`${BASE}/research/${queryId}/stream/?token=${encodeURIComponent(token)}`);
 
+  let closed = false;
+  const close = () => { closed = true; es.close(); };
+
   es.onmessage = (e) => {
-    try {
-      const { type, ...data } = JSON.parse(e.data);
-      onEvent(type, data);
-    } catch {}
+    let msg;
+    try { msg = JSON.parse(e.data); } catch { return; }
+    const { type, ...data } = msg;
+    onEvent(type, data);
   };
   es.onerror = () => {
-    onEvent("error", { message: "Stream disconnected. Check history for results." });
-    es.close();
+    // The agent keeps running server-side; let the caller fall back to polling.
+    if (closed) return;
+    close();
+    onEvent("disconnected", {});
   };
-  return () => es.close();
+  return close;
 }
 
 export async function listResearch() {
@@ -59,4 +64,10 @@ export async function getResearch(id) {
 export async function deleteResearch(id) {
   const res = await authFetch(`${BASE}/research/${id}/`, { method: "DELETE" });
   if (!res.ok) throw new Error(`Error: ${res.status}`);
+}
+
+export async function getHealth() {
+  const res = await fetch(`${BASE}/health/`);
+  if (!res.ok) throw new Error(`Error: ${res.status}`);
+  return res.json();
 }

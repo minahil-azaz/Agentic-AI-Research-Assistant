@@ -11,7 +11,7 @@ class AgentState(TypedDict):
     raw_results: List[dict]
     source_ids:  List[int]
     chunks:      List[dict]
-    report:      str
+    sreport:      str
     error:       Optional[str]
 
 
@@ -28,7 +28,7 @@ class ResearchAgent:
         from .tools import plan_searches
 
         self._emit("status", {"step": "planning", "message": "Planning search strategy…"})
-        ResearchQuery.objects.filter(id=state["query_id"]).update(status="planning")
+        ResearchQuery.objects.filter(id=state["query_id"]).update(status="planning", status_message="Planning")
 
         try:
             searches = plan_searches(state["query"])
@@ -45,7 +45,7 @@ class ResearchAgent:
         from .tools import web_search
 
         self._emit("status", {"step": "searching", "message": "Searching the web…"})
-        ResearchQuery.objects.filter(id=state["query_id"]).update(status="searching")
+        ResearchQuery.objects.filter(id=state["query_id"]).update(status="searching", status_message="Searching")
 
         seen, results = set(), []
         for q in state["sub_searches"]:
@@ -54,6 +54,9 @@ class ResearchAgent:
                 if url and url not in seen:
                     seen.add(url)
                     results.append(r)
+
+        if not results:
+            raise RuntimeError("The web search returned no results. Check TAVILY_API_KEY or try rephrasing the question.")
 
         self._emit("search_results", {"count": len(results)})
         return {**state, "raw_results": results}
@@ -64,10 +67,10 @@ class ResearchAgent:
         from .tools import scrape_page, embed_and_store
 
         self._emit("status", {"step": "scraping", "message": "Reading sources…"})
-        ResearchQuery.objects.filter(id=state["query_id"]).update(status="scraping")
+        ResearchQuery.objects.filter(id=state["query_id"]).update(status="scraping", status_message="Reading sources")
 
         query_obj  = ResearchQuery.objects.get(id=state["query_id"])
-        source_ids = []
+        sources    = []
         total      = len(state["raw_results"])
 
         for i, result in enumerate(state["raw_results"]):
@@ -90,86 +93,87 @@ class ResearchAgent:
                 query=query_obj, url=url,
                 defaults={"title": title[:500], "content": content, "snippet": content[:300]},
             )
-            source_ids.append(source.id)
+            sources.append(source)
 
+        if not sources:
+            raise RuntimeError("None of the search results could be read.")
+
+        self._emit("status", {"step": "embedding", "message": f"Indexing {len(sources)} sources…"})
+        for i, source in enumerate(sources):
+            ResearchQuery.objects.filter(id=state["query_id"]).update(
+                status="embedding",
+                status_message=f"Embedding {i+1}/{len(sources)}",
+            )
             try:
-                ResearchQuery.objects.filter(id=state["query_id"]).update(
-                    status="embedding",
-                    status_message=f"Embedding {i+1}/{total}",
-                )
-                n = embed_and_store(source.id, content)
-                self._emit("embedded", {"url": url, "chunks": n})
+                n = embed_and_store(source.id, source.content)
+                self._emit("embedded", {"url": source.url, "chunks": n})
             except Exception as e:
-                logger.warning("Embed failed %s: %s", url, e)
+                logger.warning("Embed failed %s: %s", source.url, e)
 
-        return {**state, "source_ids": source_ids}
+        return {**state, "source_ids": [s.id for s in sources]}
 
     # ── Node 4: Reflect ───────────────────────────────────────────────────────
     def reflect(self, state: AgentState) -> AgentState:
-        from research.models import ResearchQuery
+        from research.models import ResearchQuery, ResearchSource
         from .tools import retrieve_chunks
 
         self._emit("status", {"step": "writing", "message": "Analysing evidence…"})
-        ResearchQuery.objects.filter(id=state["query_id"]).update(status="writing")
+        ResearchQuery.objects.filter(id=state["query_id"]).update(status="writing", status_message="Analysing evidence")
 
-        chunks = retrieve_chunks(state["query"], state["query_id"], top_k=14)
+        try:
+            chunks = retrieve_chunks(state["query"], state["query_id"], top_k=14)
+        except Exception as e:
+            logger.warning("Retrieval failed, falling back to raw source text: %s", e)
+            chunks = []
+
+        if not chunks:
+            # Embedding/retrieval failed: ground the report on the scraped text directly
+            chunks = [
+                {"text": s.content[:2500], "url": s.url, "title": s.title}
+                for s in ResearchSource.objects.filter(query_id=state["query_id"])
+            ]
+
         self._emit("context_ready", {"chunk_count": len(chunks)})
         return {**state, "chunks": chunks}
 
     # ── Node 5: Write ─────────────────────────────────────────────────────────
     def write(self, state: AgentState) -> AgentState:
-        from research.models import ResearchQuery
+        from research.models import ResearchQuery, ResearchSource
         from .prompts import WRITE_REPORT_PROMPT
-        from .tools import get_gemini
-        from research.models import ResearchSource
+        from .tools import generate_text
 
         self._emit("status", {"step": "writing", "message": "Writing report…"})
 
-        seen_urls, source_list, context_parts = set(), [], []
-        for chunk in state["chunks"]:
-            url = chunk["url"]
-            if url not in seen_urls:
-                seen_urls.add(url)
-                source_list.append(url)
-            idx = source_list.index(url) + 1
-            context_parts.append(f"[Source {idx}] {chunk['text']}")
+        # Number sources in the same order the UI lists them (ResearchSource.Meta.ordering),
+        # so "[Source N]" in the report matches source card N.
+        src_objs = list(
+            ResearchSource.objects.filter(query_id=state["query_id"]).values("id", "url", "title", "snippet")
+        )
+        number = {s["url"]: i + 1 for i, s in enumerate(src_objs)}
 
-        context = "\n\n".join(context_parts[:12])
+        context_parts = [
+            f"[Source {number[c['url']]}] {c['text']}"
+            for c in state["chunks"][:12] if c["url"] in number
+        ]
+        context = "\n\n".join(context_parts)
         prompt  = WRITE_REPORT_PROMPT.format(query=state["query"], context=context)
-        
-        response = get_gemini().generate_content(prompt)
-        if not response.candidates or not response.candidates[0].content.parts:
-            # If generation failed, we'll still proceed with a mock/empty body
-            report_text = "(No generated content)"
-        else:
-            report_text = response.text
 
-        # Remove any existing '## Sources' section from the model output
-        main_part = report_text.split('\n## Sources', 1)[0].strip()
+        report_text = generate_text(prompt)
 
-        # Build canonical sources list from the collected chunks/source_list
-        src_lines = "\n".join(f"[Source {i+1}] {u}" for i, u in enumerate(source_list))
+        # Remove any '## Sources' section the model wrote; we append the canonical one
+        main_part = report_text.split("\n## Sources", 1)[0].strip()
+
+        src_lines = "\n".join(
+            f"{i+1}. [{s['title'] or s['url']}]({s['url']})" for i, s in enumerate(src_objs)
+        )
         full_report = f"{main_part}\n\n## Sources\n{src_lines}"
 
-        # Persist the report and emit events
         ResearchQuery.objects.filter(id=state["query_id"]).update(
             status="done", status_message="Complete", report=full_report,
         )
-        # Emit the combined report text first
         self._emit("report", {"report": full_report})
-
-        # Emit structured sources for the frontend to display immediately
-        src_objs = list(
-            ResearchSource.objects.filter(query_id=state["query_id"])\
-                .order_by("created_at")\
-                .values("id", "url", "title", "snippet")
-        )
-        # If DB sources are empty, fall back to URL-only objects
-        if not src_objs:
-            src_objs = [{"id": None, "url": u, "title": "", "snippet": ""} for u in source_list]
-
         self._emit("sources", {"sources": src_objs})
-        return {**state, "report": full_report, "source_ids": state.get("source_ids", [])}
+        return {**state, "report": full_report}
 
     # ── Run ───────────────────────────────────────────────────────────────────
     def run(self, query_id: int, query: str) -> str:

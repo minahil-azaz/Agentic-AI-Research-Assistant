@@ -4,7 +4,9 @@ import queue
 import threading
 
 from django.contrib.auth import authenticate
+from django.conf import settings
 from django.contrib.auth.models import User
+from django.db import close_old_connections, connection
 from django.http import JsonResponse, StreamingHttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status
@@ -14,7 +16,9 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import ResearchQuery
-from .serializers import ResearchQueryCreateSerializer, ResearchQuerySerializer
+from .serializers import (
+    ResearchQueryCreateSerializer, ResearchQueryListSerializer, ResearchQuerySerializer,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +142,20 @@ def me_view(request):
     return Response({"id": u.id, "username": u.username, "email": u.email})
 
 
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def health_view(request):
+    """GET /api/health/  — which model/backends are active, so the UI can show it."""
+    from .agent.tools import is_mock_embeddings, is_mock_gemini
+    return Response({
+        "gemini_model":      settings.GEMINI_MODEL,
+        "gemini_mock":       is_mock_gemini(),
+        "embedding_model":   settings.EMBEDDING_MODEL,
+        "embeddings_mock":   is_mock_embeddings(),
+        "tavily_configured": bool(settings.TAVILY_API_KEY),
+    })
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Research views
 # ─────────────────────────────────────────────────────────────────────────────
@@ -174,38 +192,68 @@ def stream_research(request, pk):
     except ResearchQuery.DoesNotExist:
         return JsonResponse({"error": "Not found."}, status=404)
 
-    event_queue: queue.Queue = queue.Queue()
-    sentinel = object()
+    # Only the first stream for a query runs the agent. Re-opening the stream
+    # (browser reconnect, reopened tab) replays the stored result instead of
+    # re-running the whole pipeline and duplicating sources.
+    claimed = ResearchQuery.objects.filter(pk=pk, status="pending").update(status="planning")
 
-    def on_event(event_type, data):
-        event_queue.put((event_type, data))
+    if not claimed:
+        query_obj.refresh_from_db()
 
-    def run_agent():
-        from .agent.agent import ResearchAgent
-        try:
-            agent = ResearchAgent(on_event=on_event)
-            agent.run(query_obj.id, query_obj.query)
-        except Exception as exc:
-            logger.exception("Agent failed: %s", exc)
-        finally:
-            event_queue.put(sentinel)
+        def replay_stream():
+            yield sse_event("connected", {"query_id": pk, "query": query_obj.query})
+            if query_obj.status == "done":
+                data = ResearchQuerySerializer(query_obj).data
+                yield sse_event("report",  {"report": data["report"]})
+                yield sse_event("sources", {"sources": data["sources"]})
+            elif query_obj.status == "error":
+                yield sse_event("error", {"message": query_obj.status_message or "Research failed."})
+            else:
+                yield sse_event("status", {"step": query_obj.status, "message": query_obj.status_message or "Still running…"})
+                yield sse_event("running", {"query_id": pk})
+            yield sse_event("done", {"query_id": pk})
 
-    threading.Thread(target=run_agent, daemon=True).start()
+        stream = replay_stream()
+    else:
+        event_queue: queue.Queue = queue.Queue()
+        sentinel = object()
 
-    def event_stream():
-        yield sse_event("connected", {"query_id": pk, "query": query_obj.query})
-        while True:
-            item = event_queue.get()
-            if item is sentinel:
-                yield sse_event("done", {"query_id": pk})
-                break
-            event_type, data = item
-            yield sse_event(event_type, data)
+        def on_event(event_type, data):
+            event_queue.put((event_type, data))
 
-    resp = StreamingHttpResponse(event_stream(), content_type="text/event-stream")
+        def run_agent():
+            from .agent.agent import ResearchAgent
+            close_old_connections()
+            try:
+                agent = ResearchAgent(on_event=on_event)
+                agent.run(query_obj.id, query_obj.query)
+            except Exception as exc:
+                logger.exception("Agent failed: %s", exc)
+            finally:
+                connection.close()  # threads get their own DB connection; don't leak it
+                event_queue.put(sentinel)
+
+        threading.Thread(target=run_agent, daemon=True).start()
+
+        def event_stream():
+            yield sse_event("connected", {"query_id": pk, "query": query_obj.query})
+            while True:
+                try:
+                    item = event_queue.get(timeout=15)
+                except queue.Empty:
+                    yield ": keep-alive\n\n"  # stops proxies closing an idle stream during long steps
+                    continue
+                if item is sentinel:
+                    yield sse_event("done", {"query_id": pk})
+                    break
+                event_type, data = item
+                yield sse_event(event_type, data)
+
+        stream = event_stream()
+
+    resp = StreamingHttpResponse(stream, content_type="text/event-stream")
     resp["Cache-Control"]     = "no-cache"
     resp["X-Accel-Buffering"] = "no"
-    resp["Access-Control-Allow-Origin"] = "*"
     return resp
 
 
@@ -213,7 +261,7 @@ def stream_research(request, pk):
 @permission_classes([IsAuthenticated])
 def list_research(request):
     qs = ResearchQuery.objects.filter(user=request.user).order_by("-created_at")[:50]
-    return Response(ResearchQuerySerializer(qs, many=True).data)
+    return Response(ResearchQueryListSerializer(qs, many=True).data)
 
 
 @api_view(["GET", "DELETE"])

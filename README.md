@@ -160,11 +160,32 @@ Key backend files:
 
 ---
 
-If you'd like, I can also:
+## Deploying (Render + optional Vercel)
 
-- migrate the Gemini client from `google.generativeai` → `google.genai` (recommended),
-- add a UI indicator when `FORCE_MOCK_GEMINI=True`, or
-- add a small health-check endpoint that verifies Gemini connectivity.
+The backend can't run on Vercel: a research run takes minutes and streams progress over SSE, and
+Vercel's serverless functions time out and stop background threads. Host the **backend and database
+on Render**; the frontend can go on Render or Vercel.
 
-Pick one and I will implement it.
-# Agentic-AI-Research-Assistant
+### 1. Backend + database on Render
+
+1. Push this repo to GitHub.
+2. Render dashboard → **New → Blueprint** → select the repo. `render.yaml` creates:
+   - `research-db` — Postgres (pgvector is enabled by the first migration)
+   - `research-backend` — Django API with gunicorn
+   - `research-frontend` — the React app as a static site (delete it from the blueprint if you use Vercel)
+3. When prompted, fill in `GEMINI_API_KEY`, `TAVILY_API_KEY`, `CORS_ALLOWED_ORIGINS` (your frontend URL)
+   and `VITE_API_URL` (your backend URL, e.g. `https://research-backend.onrender.com`).
+4. Check `https://<backend>/api/health/` — it shows the active Gemini model and whether mocks are on.
+
+Notes:
+- Free/Starter plans have 512 MB RAM, too little for the sentence-transformers model, so the blueprint
+  sets `FORCE_MOCK_EMBEDDINGS=True` (keyword-hash retrieval). On Standard (2 GB) or higher set it to `False`.
+- Free web services sleep after 15 min idle (the first request then takes ~1 min); free databases expire after 30 days.
+- `VITE_API_URL` is baked in at build time — redeploy the frontend after changing it.
+
+### 2. Frontend on Vercel (instead of Render)
+
+1. Vercel → **Add New Project** → import the repo, set **Root Directory** to `frontend`
+   (`frontend/vercel.json` configures the Vite build and SPA routing).
+2. Add the environment variable `VITE_API_URL=https://<your-backend>.onrender.com` and deploy.
+3. Add the Vercel URL (e.g. `https://my-app.vercel.app`) to the backend's `CORS_ALLOWED_ORIGINS` on Render.
