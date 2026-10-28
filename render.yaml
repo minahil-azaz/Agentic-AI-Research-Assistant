@@ -47,11 +47,10 @@ services:
       # Keep "True" there (keyword-hash retrieval); set "False" on Standard (2 GB) or higher.
       - key: FORCE_MOCK_EMBEDDINGS
         value: "True"
-      # Frontend URL(s), e.g. https://research-frontend.onrender.com or https://my-app.vercel.app
+      # Frontend URL, e.g. https://research-frontend.onrender.com
       - key: CORS_ALLOWED_ORIGINS
         sync: false
 
-  # Skip this service if you host the frontend on Vercel instead (see frontend/vercel.json).
   - type: web
     name: research-frontend
     runtime: static

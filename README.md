@@ -160,32 +160,35 @@ Key backend files:
 
 ---
 
-## Deploying (Render + optional Vercel)
+## Deploying on Render
 
-The backend can't run on Vercel: a research run takes minutes and streams progress over SSE, and
-Vercel's serverless functions time out and stop background threads. Host the **backend and database
-on Render**; the frontend can go on Render or Vercel.
+`render.yaml` is a Render Blueprint that creates everything in one go:
 
-### 1. Backend + database on Render
+| Service | What it is |
+|---|---|
+| `research-db` | Postgres (pgvector is enabled by the first migration) |
+| `research-backend` | Django API on gunicorn |
+| `research-frontend` | React app as a static site |
 
-1. Push this repo to GitHub.
-2. Render dashboard → **New → Blueprint** → select the repo. `render.yaml` creates:
-   - `research-db` — Postgres (pgvector is enabled by the first migration)
-   - `research-backend` — Django API with gunicorn
-   - `research-frontend` — the React app as a static site (delete it from the blueprint if you use Vercel)
-3. When prompted, fill in `GEMINI_API_KEY`, `TAVILY_API_KEY`, `CORS_ALLOWED_ORIGINS` (your frontend URL)
-   and `VITE_API_URL` (your backend URL, e.g. `https://research-backend.onrender.com`).
-4. Check `https://<backend>/api/health/` — it shows the active Gemini model and whether mocks are on.
+### Steps
 
-Notes:
+1. Render dashboard → **New → Blueprint** → select this repo → **Apply**.
+2. When prompted for secret values, enter:
+   - `GEMINI_API_KEY`, `TAVILY_API_KEY`
+   - `CORS_ALLOWED_ORIGINS` = `https://research-frontend.onrender.com`
+   - `VITE_API_URL` = `https://research-backend.onrender.com`
+3. After the first deploy, open each service and check its real URL at the top of the page. Render adds
+   a suffix (e.g. `research-backend-x7k2.onrender.com`) if a name is taken. If either differs, fix the value:
+   - backend URL changed → update `VITE_API_URL` on **research-frontend**, then **Manual Deploy** it
+     (the URL is baked in at build time)
+   - frontend URL changed → update `CORS_ALLOWED_ORIGINS` on **research-backend** (saves and restarts)
+4. Open `https://<backend>/api/health/` — it shows the active Gemini model and whether mocks are on.
+   Then open the frontend URL, register, and run a query.
+
+### Notes
+
 - Free/Starter plans have 512 MB RAM, too little for the sentence-transformers model, so the blueprint
   sets `FORCE_MOCK_EMBEDDINGS=True` (keyword-hash retrieval). On Standard (2 GB) or higher set it to `False`.
-- Free web services sleep after 15 min idle (the first request then takes ~1 min); free databases expire after 30 days.
-- `VITE_API_URL` is baked in at build time — redeploy the frontend after changing it.
-
-### 2. Frontend on Vercel (instead of Render)
-
-1. Vercel → **Add New Project** → import the repo, set **Root Directory** to `frontend`
-   (`frontend/vercel.json` configures the Vite build and SPA routing).
-2. Add the environment variable `VITE_API_URL=https://<your-backend>.onrender.com` and deploy.
-3. Add the Vercel URL (e.g. `https://my-app.vercel.app`) to the backend's `CORS_ALLOWED_ORIGINS` on Render.
+- Free web services sleep after 15 min idle (the first request then takes ~1 min).
+- Free databases expire after 30 days — choose a paid database plan to keep users' history.
+- Pushing to `main` redeploys automatically.

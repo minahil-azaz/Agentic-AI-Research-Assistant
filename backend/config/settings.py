@@ -89,17 +89,17 @@ CHANNEL_LAYERS = {
     }
 }
 
-# Comma-separated frontend origins, e.g. https://my-app.vercel.app. Unset = allow all (local dev).
+# Comma-separated frontend origins, e.g. https://research-frontend.onrender.com. Unset = allow all (local dev).
 CORS_ALLOWED_ORIGINS = [o.strip().rstrip("/") for o in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if o.strip()]
 CORS_ALLOW_ALL_ORIGINS = not CORS_ALLOWED_ORIGINS
 CSRF_TRUSTED_ORIGINS = [o.strip().rstrip("/") for o in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if o.strip()]
 if RENDER_EXTERNAL_HOSTNAME:
     CSRF_TRUSTED_ORIGINS.append(f"https://{RENDER_EXTERNAL_HOSTNAME}")
 
-# Behind Render's/Vercel's HTTPS proxy
+# Behind Render's HTTPS proxy
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 if not DEBUG:
-    # Render/Vercel already redirect http→https at the edge, so SECURE_SSL_REDIRECT is left off
+    # Render already redirects http→https at the edge, so SECURE_SSL_REDIRECT is left off
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE    = True
     SECURE_HSTS_SECONDS   = 60 * 60 * 24 * 30
